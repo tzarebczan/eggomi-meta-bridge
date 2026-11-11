@@ -37,13 +37,19 @@ two agree.
 replace directives in a dependency's `go.mod` do not apply to the modules that import it, and the build
 fails without it. Keep the two in sync when moving the pin.
 
-At this commit the connector's web user agent claims Chrome 141. `TestUserAgentDrift` (in `config/`)
-reports that version and fails when a new pin changes it, so the change gets reviewed. With
-`EGGOMI_BROWSER_CHROME=<major>` it also fails when the bridge is more than one major version away from
-the browser the owner signs in with.
+At this commit the connector's web user agent claims Chrome 141, a fingerprint that ages as the browser
+the owner signs in with moves on. The image build patches it to the browser's own version:
+[`patches/useragent.patch`](patches/useragent.patch) holds the two-line change with the Chrome major
+version as `@CHROME_MAJOR@`, and `patches/apply.sh <module dir> <chrome major>` fills it in, applies it
+to a writable copy of the pinned module and checks the result. Its context lines pin upstream's
+spelling, so a pin that changes them fails loudly (`TestUserAgentPatch`). The build then runs
+`EGGOMI_BROWSER_CHROME=<major> go test ./config` against the patched tree, so the image does not build
+when the patched bridge and the browser differ by more than one major version (`TestUserAgentDrift`).
+Unpatched builds, like this checkout, report the upstream version and pass.
 
 To move the pin: `go get go.mau.fi/mautrix-meta@<commit>`, copy any changed `replace` lines from its
-`go.mod`, update `config.Upstream`, then `go mod tidy` and the tests.
+`go.mod`, update `config.Upstream`, then `go mod tidy` and the tests (which check the patch still
+applies).
 
 ## Layout
 

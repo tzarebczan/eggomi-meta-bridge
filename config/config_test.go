@@ -2,6 +2,8 @@ package config
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -75,14 +77,13 @@ func TestUpstreamMatchesGoMod(t *testing.T) {
 }
 
 // Upstream's web user agent claims a fixed Chrome version, which ages into
-// a fingerprint the owner's browser does not share. A new pin that changes
-// it fails here so the change gets reviewed. EGGOMI_BROWSER_CHROME, the
-// major version of the owner's browser, turns the drift report into a check.
+// a fingerprint the owner's browser does not share. The image build patches
+// it to the browser's own version (patches/useragent.patch) and runs this
+// test against the patched build with EGGOMI_BROWSER_CHROME set, which fails
+// when the two are more than one major version apart. Without the variable
+// the version is only reported: an unpatched build (the default) is meant to
+// drift.
 func TestUserAgentDrift(t *testing.T) {
-	const pinned = "141"
-	if useragent.ChromeVersion != pinned {
-		t.Fatalf("upstream's user agent now claims Chrome %s (was %s): review it, then update this test", useragent.ChromeVersion, pinned)
-	}
 	if !strings.Contains(useragent.UserAgent, "Chrome/"+useragent.ChromeVersion+".") || !strings.Contains(useragent.SecCHUserAgent, `v="`+useragent.ChromeVersion+`"`) {
 		t.Fatalf("user agent strings do not follow ChromeVersion")
 	}
@@ -98,5 +99,51 @@ func TestUserAgentDrift(t *testing.T) {
 	have, _ := strconv.Atoi(useragent.ChromeVersion)
 	if d := browser - have; d > 1 || d < -1 {
 		t.Errorf("user-agent drift: bridge claims Chrome %d, the browser is %d", have, browser)
+	}
+}
+
+// The image build applies patches/useragent.patch to the pinned upstream
+// with the browser's Chrome major version. The patch's context lines pin
+// upstream's spelling, so a pin that changes them fails the build; this
+// test fails first, with a clearer message. It applies the patch to a copy
+// of the pinned module's useragent package and checks the result.
+func TestUserAgentPatch(t *testing.T) {
+	if _, err := exec.LookPath("patch"); err != nil {
+		t.Skip("patch not installed")
+	}
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "go.mau.fi/mautrix-meta").CombinedOutput()
+	if err != nil {
+		t.Skipf("locating the pinned module: %v: %s", err, out)
+	}
+	src := filepath.Join(strings.TrimSpace(string(out)), "pkg", "messagix", "useragent", "useragent.go")
+	raw, err := os.ReadFile(src)
+	if err != nil {
+		t.Skipf("reading the pinned useragent.go: %v", err)
+	}
+	root := t.TempDir()
+	target := filepath.Join(root, "pkg", "messagix", "useragent", "useragent.go")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("sh", "../patches/apply.sh", root, "154").CombinedOutput(); err != nil {
+		t.Fatalf("the patch does not apply to the pinned tree: %v: %s", err, out)
+	}
+	patched, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`const ChromeVersion = "154"`,
+		`const ChromeVersionFull = ChromeVersion + ".0.0.0"`,
+	} {
+		if !strings.Contains(string(patched), want) {
+			t.Errorf("patched useragent.go lacks %q", want)
+		}
+	}
+	if out, err := exec.Command("sh", "../patches/apply.sh", root, "abc").CombinedOutput(); err == nil {
+		t.Errorf("a non-numeric major version was accepted: %s", out)
 	}
 }
