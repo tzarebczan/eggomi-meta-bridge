@@ -22,7 +22,13 @@ sed "s/@CHROME_MAJOR@/$major/g" "$here/useragent.patch" >"$work"
 # --batch --forward: never prompt, and refuse (rather than reverse) a tree
 # the patch was already applied to. The context lines pin the upstream
 # spelling, so a pin that changes them fails here, loudly.
-patch -p1 --batch --forward -d "$dir" -i "$work" >&2
+if command -v patch >/dev/null 2>&1; then
+  patch -p1 --batch --forward -d "$dir" -i "$work" >&2
+else
+  # The golang build image ships git but not patch; git apply enforces the
+  # same context and likewise refuses a second application.
+  (cd "$dir" && git apply -p1 --whitespace=nowarn "$work") >&2
+fi
 grep -q "^const ChromeVersion = \"$major\"\$" "$target" || {
   echo "patched $target does not claim Chrome $major" >&2
   exit 1
